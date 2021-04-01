@@ -1,0 +1,26 @@
+{
+  "name": "sk-performance-nagger",
+  "version": "0.0.0",
+  "description": "SignalK plugin to issue notifications about sail boat racing performance",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sergei/sk-performance-nagger.git"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-notifications"
+  ],
+  "author": "Sergei Podshivalov",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/sergei/sk-performance-nagger/issues"
+  },
+  "homepage": "https://github.com/sergei/sk-performance-nagger#readme",
+  "devDependencies": {
+    "jest": "^26.6.3"
+  }
+}
