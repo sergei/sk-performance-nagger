@@ -6,6 +6,10 @@ function degrees(radians) {
     return radians / (Math.PI/180);
 }
 
+function mps(knots){
+    return knots * (3600 / 1852.)
+}
+
 // Standard Normal variate using Box-Muller transform.
 function randn_bm() {
     let u = 0, v = 0;
@@ -18,6 +22,8 @@ class BoatModel{
     constructor(twd=0, tws=10, cog=30, sog=5,
                 delta_sog =0, delta_twa =0,
                 speed_rms=0.5, angle_rms=1) {
+        this.startUtc = new Date(2021, 1, 1, 0, 0, 0)
+        this.startLoc = {latitude: 38., longitude: -122}
         this.t = [0]
         this.twd = [twd]
         this.tws = [tws]
@@ -31,10 +37,10 @@ class BoatModel{
 
     update(t, options){
         if (options === undefined) options = {};
-        const twd = options.twd ? options.twd  : this.twd[this.twd-1]
-        const tws = options.tws ? options.tws  : this.tws[this.tws-1]
-        const cog = options.cog ? options.cog  : this.cog[this.cog-1]
-        const sog = options.sog ? options.sog  : this.sog[this.sog-1]
+        const twd = options.twd ? options.twd  : this.twd[this.twd.length-1]
+        const tws = options.tws ? options.tws  : this.tws[this.tws.length-1]
+        const cog = options.cog ? options.cog  : this.cog[this.cog.length-1]
+        const sog = options.sog ? options.sog  : this.sog[this.sog.length-1]
 
         this.t.push(t)
         this.twd.push(twd)
@@ -43,8 +49,8 @@ class BoatModel{
         this.sog.push(sog)
     }
 
-    get_epochs(start_utc, start_loc, num, dt=1){
-        const epochs = []
+    getDeltas(num, dt=1){
+        const deltas = []
 
         let idx = 0
         let t = 0
@@ -54,7 +60,7 @@ class BoatModel{
         let sog = this.sog[0]
         let delta_sog = this.delta_sog[0]
         let delta_twa = this.delta_twa[0]
-        let loc = Object.assign({}, start_loc)
+        let loc = Object.assign({}, this.startLoc)
         let mag_decl = 13
 
         for(let i =0; i< num; i++) {
@@ -66,7 +72,7 @@ class BoatModel{
                 idx ++
             }
 
-            let utc = start_utc + t
+            let utc = this.startUtc + t
             let hdg = cog - mag_decl
             let twa = (twd - hdg) % 360
             twa = twa > 180 ? twa - 360: twa
@@ -76,16 +82,20 @@ class BoatModel{
             awa = twa > 0 ? awa  :  -awa
             let vmg = sog * Math.cos(radians(twa))
 
-            epochs.push({
-                utc: utc,
-                pos: loc,
-                hdg: radians(this.noisy_dir(hdg)),
-                vmg: this.noisy_speed(vmg),
-                twa: radians(this.noisy_angle(twa)),
-                sow: this.noisy_speed(sog),
-                target_twa: radians(twa + delta_twa),
-                target_sow: sog + delta_sog
-            })
+            const delta = {
+                timestamp: utc,
+                values:[
+                    {path:'navigation.datetime', value:utc},
+                    {path:'navigation.position', value:loc},
+                    {path:'navigation.headingMagnetic', value:radians(this.noisy_dir(hdg))},
+                    {path:'performance.velocityMadeGood', value:mps(this.noisy_speed(vmg))},
+                    {path:'environment.wind.angleTrueWater', value:radians(this.noisy_angle(twa))},
+                    {path:'navigation.speedThroughWater', value:mps(this.noisy_speed(sog))},
+                    {path:'performance.targetSpeed', value:mps(sog + delta_sog)},
+                    {path:'performance.targetAngle', value:radians(twa + delta_twa)},
+                ]
+            }
+            deltas.push(delta)
 
             t += dt
             const dist_deg = (sog /60) * (dt / 3600.)
@@ -93,7 +103,7 @@ class BoatModel{
             loc.longitude += dist_deg * Math.sin(radians(cog)) * Math.cos(radians(loc.latitude))
         }
 
-        return epochs
+        return deltas
     }
 
     noisy_angle(angle) {
@@ -111,7 +121,7 @@ class BoatModel{
         return direction % 360.
     }
 
-    noisy_speed(self, speed) {
+    noisy_speed(speed) {
         return Math.abs(speed + randn_bm() *  this.speed_rms)
     }
 
