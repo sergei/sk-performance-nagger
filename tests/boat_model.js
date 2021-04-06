@@ -1,14 +1,4 @@
-function radians(degrees) {
-    return degrees * (Math.PI/180);
-}
-
-function degrees(radians) {
-    return radians / (Math.PI/180);
-}
-
-function mps(knots){
-    return knots * (3600 / 1852.)
-}
+const utils = require('../src/utils')
 
 // Standard Normal variate using Box-Muller transform.
 function randn_bm() {
@@ -76,31 +66,31 @@ class BoatModel{
             let hdg = cog - mag_decl
             let twa = (twd - hdg) % 360
             twa = twa > 180 ? twa - 360: twa
-            let cos_twa = Math.cos(radians(twa))
+            let cos_twa = Math.cos(utils.radians(twa))
             let aws = Math.sqrt(sog * sog + tws * tws + 2 * sog * tws * cos_twa)
-            let awa = degrees(Math.acos((tws * cos_twa + sog) / aws))
+            let awa = utils.degrees(Math.acos((tws * cos_twa + sog) / aws))
             awa = twa > 0 ? awa  :  -awa
-            let vmg = sog * Math.cos(radians(twa))
+            let vmg = sog * Math.cos(utils.radians(twa))
 
             const delta = {
                 timestamp: utc,
                 values:[
                     {path:'navigation.datetime', value:utc},
                     {path:'navigation.position', value:loc},
-                    {path:'navigation.headingMagnetic', value:radians(this.noisy_dir(hdg))},
-                    {path:'performance.velocityMadeGood', value:mps(this.noisy_speed(vmg))},
-                    {path:'environment.wind.angleTrueWater', value:radians(this.noisy_angle(twa))},
-                    {path:'navigation.speedThroughWater', value:mps(this.noisy_speed(sog))},
-                    {path:'performance.targetSpeed', value:mps(sog + delta_sog)},
-                    {path:'performance.targetAngle', value:radians(twa + delta_twa)},
+                    {path:'navigation.headingMagnetic', value:utils.radians(this.noisy_dir(hdg))},
+                    {path:'performance.velocityMadeGood', value:utils.mps(this.noisy_speed(vmg))},
+                    {path:'environment.wind.angleTrueWater', value:utils.radians(this.noisy_angle(twa))},
+                    {path:'navigation.speedThroughWater', value:utils.mps(this.noisy_speed(sog))},
+                    {path:'performance.targetSpeed', value:utils.mps(sog + delta_sog)},
+                    {path:'performance.targetAngle', value:utils.radians(twa + delta_twa)},
                 ]
             }
             deltas.push(delta)
 
             t += dt
             const dist_deg = (sog /60) * (dt / 3600.)
-            loc.latitude += dist_deg * Math.cos(radians(cog))
-            loc.longitude += dist_deg * Math.sin(radians(cog)) * Math.cos(radians(loc.latitude))
+            loc.latitude += dist_deg * Math.cos(utils.radians(cog))
+            loc.longitude += dist_deg * Math.sin(utils.radians(cog)) * Math.cos(utils.radians(loc.latitude))
         }
 
         return deltas

@@ -1,4 +1,5 @@
 const SlidingWindow = require('./sliding_window')
+const SlidingWindowAngle = require("./sliding_window_angle");
 
 // Map SignalK paths to the epoch object
 const PATH_MAP = {
@@ -29,8 +30,10 @@ class Deque {
 }
 
 const METERS_IN_NM = 1852.
-
 const DEG2RAD = Math.PI / 180;
+const PI2 = Math.PI * 2;
+const PI_BY_2 = Math.PI / 2;
+
 const BEAT_THR = 70 * DEG2RAD;
 const RUN_THR = 110 * DEG2RAD;
 
@@ -47,7 +50,21 @@ const TURN_THR2 = WIN_LEN / 4   // Threshold to detect roundings and tacks
 
 const STRAIGHT_THR = WIN_LEN - TURN_THR1
 
-const WIND_SHIFT_THR = 10
+const WIND_SHIFT_THR = 10 * DEG2RAD
+
+
+function angle_u(angle) {
+    return (angle + PI2 ) % PI2;
+}
+
+
+function angle_s(angle) {
+    if( angle > Math.PI )
+        return angle - PI2
+    else
+        return angle
+}
+
 
 class NavStats{
     constructor(error, debug, cb){
@@ -57,14 +74,14 @@ class NavStats{
         this.maxAllowableDataAgeMs = 10000;
         this.winLen = WIN_LEN;
         this.epoch = {
-            utc: null,
-            pos: null,
-            hdg: null,
-            vmg: null,
-            twa: null,
-            sow: null,
-            target_twa: null,
-            target_sow: null,
+            utc: undefined,
+            pos: undefined,
+            hdg: undefined,
+            vmg: undefined,
+            twa: undefined,
+            sow: undefined,
+            target_twa: undefined,
+            target_sow: undefined,
         }
         
         // Queues to analyze the turns
@@ -79,10 +96,9 @@ class NavStats{
         this.stats_loc = new Deque(this.winLen)
 
         // Wind shift analysis
-        this.ref_twd = null
-        this.stats_twd = new SlidingWindow(this.winLen)
-        this.stats_twa = new SlidingWindow(this.winLen)
-        this.stats_hdg = new SlidingWindow(this.winLen)
+        this.ref_twd = undefined
+        this.stats_twd = new SlidingWindowAngle(this.winLen)
+        this.stats_twa = new SlidingWindowAngle(this.winLen)
 
         // Target performance analysis
         this.stats_vmg_diff = new SlidingWindow(this.winLen)
@@ -98,7 +114,7 @@ class NavStats{
         this.turns_loc.clear()
         
         // The instruments usually are not calibrated so we reset all stats information after every turn
-        this.ref_twd = null
+        this.ref_twd = undefined
         this.clear_stats_queues()
     }
 
@@ -107,7 +123,6 @@ class NavStats{
         this.stats_loc.clear()
         this.stats_twd.clear()
         this.stats_twa.clear()
-        this.stats_hdg.clear()
         this.stats_vmg_diff.clear()
         this.stats_speed_diff.clear()
         this.stats_point_diff.clear()
@@ -119,9 +134,9 @@ class NavStats{
         const sog = epoch.sow.v
         const hdg = epoch.hdg.v
         const utc = epoch.utc.v
-        const vmg_diff = epoch.vmg - epoch.target_sow * Math.cos(epoch.target_twa)
-        const stats_speed_diff = epoch.sow - epoch.target_sow
-        const stats_point_diff = Math.abs(epoch.twa) - Math.abs(epoch.target_twa)
+        const vmg_diff = epoch.vmg.v - epoch.target_sow.v * Math.cos(epoch.target_twa.v)
+        const stats_speed_diff = epoch.sow.v - epoch.target_sow.v
+        const stats_point_diff = Math.abs(epoch.twa.v) - Math.abs(epoch.target_twa.v)
 
         let up_down = 0
         if (Math.abs(twa) < BEAT_THR)
@@ -139,16 +154,15 @@ class NavStats{
         
         // Update the queues
         this.turns_utc.append(utc)
-        this.turns_loc.append(epoch.pos)
+        this.turns_loc.append(epoch.pos.v)
         this.turns_sog.append(sog)
         this.turns_up_down.append(up_down)
         this.turns_sb_pr.append(sb_pr)
 
         this.stats_utc.append(utc)
-        this.stats_loc.append(epoch.pos)
+        this.stats_loc.append(epoch.pos.v)
         this.stats_twd.append(twd)
         this.stats_twa.append(twa)
-        this.stats_hdg.append(hdg)
 
         this.stats_vmg_diff.append(vmg_diff)
         this.stats_speed_diff.append(stats_speed_diff)
@@ -185,11 +199,49 @@ class NavStats{
                 const tack_idx = HALF_WIN
                 const utc = this.turns_utc[tack_idx]
                 const loc = this.turns_loc[tack_idx]
-                const is_tack = Math.abs(twa) < 90 * DEG2RAD
+                const is_tack = Math.abs(twa) < PI_BY_2
                 const distance_loss_m = this.compute_tack_efficiency(tack_idx)
                 this.cb(is_tack? 'tack' : 'gybe', utc, loc, distance_loss_m)
                 this.reset()
             }
+        }
+
+        // Compute performance stats and evaluate wind shifts only if we are sailing without any maneuvers
+        // This allows us to to ease the requirements on instrument calibration
+        if ( Math.abs(this.turns_up_down.get_sum()) > STRAIGHT_THR
+            && Math.abs(this.turns_sb_pr.get_sum()) > STRAIGHT_THR
+            && this.stats_twd.isFull() )
+        {
+            // Check for wind shift
+            const avg_twd = angle_u(this.stats_twd.get_avg())  // 0; 2*pi
+            const avg_twa = angle_s(this.stats_twa.get_avg())  // -pi; +pi
+            if (this.ref_twd === undefined )
+                this.ref_twd = avg_twd
+
+            const wind_shift = angle_s(avg_twd - this.ref_twd)  // -pi; pi
+            const is_lift = (wind_shift * avg_twa) > 0
+
+            if (Math.abs(wind_shift) > WIND_SHIFT_THR) {
+                this.cb(is_lift ? 'lift' : 'header', utc, epoch.pos.v, wind_shift)
+                this.ref_twd = avg_twd
+            }
+
+            // Compute target stats
+            if (this.stats_vmg_diff.isFull() ) {
+                const duration_sec = this.stats_vmg_diff.len()
+                const speed_delta = this.stats_speed_diff.get_avg()
+
+                let distance_delta = this.stats_vmg_diff.get_avg()  * duration_sec
+                const is_downwind = this.turns_up_down.get_sum() < 0
+                if( is_downwind )
+                    distance_delta = - distance_delta
+
+                const twa_angle_delta = this.stats_point_diff.get_avg()
+                this.cb('target-stats', utc, epoch.pos.v, distance_delta, speed_delta, twa_angle_delta)
+            }
+
+            // Start new window
+            this.clear_stats_queues()
         }
     }
 
@@ -221,8 +273,8 @@ class NavStats{
         if ( validPositionReceived ) {
             let maxAge = -1;
             // Make sure that *all* values are up to date
-            Object.entries(this.epoch).forEach( (x,v) => {
-                const age = x[1] !== null ? timeStamp - x[1].t : 3600000
+            Object.entries(this.epoch).forEach( (x) => {
+                const age = x[1] !== undefined ? timeStamp - x[1].t : 3600000
                 maxAge = Math.max(maxAge, age)
             })
 
