@@ -1,5 +1,7 @@
 const SlidingWindow = require('./sliding_window')
 const SlidingWindowAngle = require("./sliding_window_angle");
+const { degrees } = require('./utils')
+const { knots } = require('./utils')
 
 // Map SignalK paths to the epoch object
 const PATH_MAP = {
@@ -40,7 +42,7 @@ const RUN_THR = 110 * DEG2RAD;
 const SB_MIN_THR = 5 * DEG2RAD;
 const SB_MAX_THR = 175 * DEG2RAD;
 
-const SOG_THR = 2. * (3600 / 1852.)  // If average SOG is below this threshold we throw the data out
+const SOG_THR = 2. * (1852. / 3600)  // If average SOG is below this threshold we throw the data out
 
 const WIN_LEN = 60  // Length of the sliding window
 const HALF_WIN = WIN_LEN / 2
@@ -130,6 +132,8 @@ class NavStats{
 
     // The deltas were assembled to the epoch, let's do computations
     processEpoch(epoch) {
+        this.debug('processEpoch')
+
         const twa = epoch.twa.v
         const sog = epoch.sow.v
         const hdg = epoch.hdg.v
@@ -151,16 +155,17 @@ class NavStats{
             sb_pr = -1
 
         const twd = twa + hdg
-        
+        const last_pos = epoch.pos.v;
+
         // Update the queues
         this.turns_utc.append(utc)
-        this.turns_loc.append(epoch.pos.v)
+        this.turns_loc.append(last_pos)
         this.turns_sog.append(sog)
         this.turns_up_down.append(up_down)
         this.turns_sb_pr.append(sb_pr)
 
         this.stats_utc.append(utc)
-        this.stats_loc.append(epoch.pos.v)
+        this.stats_loc.append(last_pos)
         this.stats_twd.append(twd)
         this.stats_twa.append(twa)
 
@@ -184,10 +189,10 @@ class NavStats{
             // Do more costly verification
             const [sum_before, sum_after] = this.turns_up_down.sum_halves()
             if (Math.abs(sum_before) > TURN_THR1 && Math.abs(sum_after) > TURN_THR2) {
-                const utc = this.turns_utc[HALF_WIN]
+                const event_utc = this.turns_utc[HALF_WIN]
                 const loc = this.turns_loc[HALF_WIN]
                 const is_windward = sum_after < 0
-                this.cb(is_windward ? 'windward-mark' : 'leeward-mark', utc, loc)
+                this.cb(is_windward ? 'windward-mark' : 'leeward-mark', utc, {utc:event_utc, pos: loc})
                 this.reset()
             }
         }
@@ -197,11 +202,21 @@ class NavStats{
             const [sum_before, sum_after] = this.turns_sb_pr.sum_halves()
             if( Math.abs(sum_before) > TURN_THR1 && Math.abs(sum_after) > TURN_THR2) {
                 const tack_idx = HALF_WIN
-                const utc = this.turns_utc[tack_idx]
+                const event_utc = this.turns_utc[tack_idx]
                 const loc = this.turns_loc[tack_idx]
                 const is_tack = Math.abs(twa) < PI_BY_2
-                const distance_loss_m = this.compute_tack_efficiency(tack_idx)
-                this.cb(is_tack? 'tack' : 'gybe', utc, loc, distance_loss_m)
+                const distance_loss = this.compute_tack_efficiency(tack_idx)
+
+                const tackOrGybe = is_tack ? 'tack' : 'gybe'
+                const lostOrGained = distance_loss > 0 ? 'lost' : 'gained'
+                const message = `You ${lostOrGained} ${Math.abs(distance_loss).toFixed(0)} meters on this ${tackOrGybe}`
+
+                this.cb(is_tack? 'tack' : 'gybe', utc, {
+                    state: 'alert',
+                    method: [ "visual", "sound" ],
+                    message: message,
+                    utc:event_utc, pos:loc, distance_loss: distance_loss
+                })
                 this.reset()
             }
         }
@@ -222,7 +237,16 @@ class NavStats{
             const is_lift = (wind_shift * avg_twa) > 0
 
             if (Math.abs(wind_shift) > WIND_SHIFT_THR) {
-                this.cb(is_lift ? 'lift' : 'header', utc, epoch.pos.v, wind_shift)
+                const liftedOrHeaded = is_lift ? 'lifted' : 'headed'
+                const veeredOrBacked = wind_shift >0 ? 'veered' : 'backed'
+                const message = `Wind ${veeredOrBacked} by ${degrees(Math.abs(wind_shift))} degrees. You got ${liftedOrHeaded}`
+
+                this.cb(is_lift ? 'lift' : 'header', utc, {
+                    state: 'alert',
+                    method: [ "visual", "sound" ],
+                    message: message,
+                    pos: last_pos, shift: wind_shift
+                })
                 this.ref_twd = avg_twd
             }
 
@@ -237,7 +261,21 @@ class NavStats{
                     distance_delta = - distance_delta
 
                 const twa_angle_delta = this.stats_point_diff.get_avg()
-                this.cb('target-stats', utc, epoch.pos.v, distance_delta, speed_delta, twa_angle_delta)
+                const gainedOrLost = distance_delta >= 0 ? 'gained' : 'lost'
+                const fasterOrSlower = speed_delta < 0 ? 'slower' : 'faster'
+                const higherOrLower = twa_angle_delta < 0 ? 'higher' : 'lower'
+                const message =
+                  `You ${gainedOrLost} ${Math.abs(distance_delta).toFixed(0)} meters to the target boat. `
+                  + `You were ${knots(Math.abs(speed_delta)).toFixed(1)} knots ${fasterOrSlower} than target. `
+                  + `You were sailing ${degrees(Math.abs(twa_angle_delta)).toFixed(0)} degrees ${higherOrLower} than target.`
+
+                this.cb('target-stats', utc, {
+                    state: 'alert',
+                    method: [ "visual", "sound" ],
+                    message: message,
+                    pos: last_pos,
+                    distance_delta: distance_delta, speed_delta: speed_delta, twa_angle_delta: twa_angle_delta
+                })
             }
 
             // Start new window
@@ -278,7 +316,8 @@ class NavStats{
                 maxAge = Math.max(maxAge, age)
             })
 
-            if (maxAge < this.maxAllowableDataAgeMs) {
+            if (true) {
+            // if (maxAge < this.maxAllowableDataAgeMs) {
                 this.processEpoch(this.epoch);
             }
         }

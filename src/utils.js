@@ -7,7 +7,11 @@ function degrees(radians) {
 }
 
 function mps(knots){
-    return knots * (3600 / 1852.)
+    return knots * (  1852./ 3600)
 }
 
-module.exports = { radians, degrees, mps };
+function knots(mps){
+    return mps / (  1852./ 3600)
+}
+
+module.exports = { radians, degrees, mps, knots};

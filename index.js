@@ -2,14 +2,28 @@ const {PATH_MAP} = require("./src/nav_stats");
 const {NavStats} = require("./src/nav_stats");
 module.exports = function (app) {
     var plugin = {};
-    var unsubscribes = [];
-    var navStats = new NavStats(app.error,app.debug, message => {
-        app.debug(message)
-    });
-
     plugin.id = 'sk-performance-nagger';
     plugin.name = 'Sailing performance nagger';
     plugin.description = 'This plugin nags the driver with the remark regarding his/her driving performance';
+
+    var unsubscribes = [];
+    var navStats = new NavStats(app.error,app.debug, (event, utc, value) => {
+        app.debug(event)
+        app.debug(value)
+        app.handleMessage(plugin.id, {
+            updates: [
+                {
+                    timestamp: utc,
+                    values: [
+                        {
+                            path: 'notifications.performance.' + event,
+                            value: value
+                        }
+                    ]
+                }
+            ]
+        })
+    });
 
     plugin.start = function (options, restartPlugin) {
         app.debug('Plugin started');
